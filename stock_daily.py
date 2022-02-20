@@ -1,77 +1,114 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[1]:
+# In[13]:
 
 
 import requests
-import pymysql
+import pymssql
 import json
 import pandas as pd
 import time
-from datetime import date
 from fake_useragent import UserAgent
+from datetime import datetime
 
 db_settings = {
     "host": "127.0.0.1",
-    "port": 3306,
-    "user": "root",
-    "password": "",
-    "db": "ncu_database",
+    "user": "sa",
+    "password": "zxc123",
+    "database": "ncu_database",
     "charset": "utf8"
 }
 
 
-# In[2]:
+# In[14]:
 
 
-try:  
-    today = date.today()
-    user_agent = UserAgent()
-    conn = pymysql.connect(**db_settings)
-    with conn.cursor() as cursor:
-        insert_command = "INSERT INTO stock_data(c, d, v, z, o, h, l, tz, u, tv) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
-        command = "SELECT * FROM etf_list"
-        cursor.execute(command)
-        conn.commit()
-        result = cursor.fetchall()
-        for r in result:
-            try:
-                stock = r[0]
-                date = today.strftime("%Y%m%d")
-                address = f"https://www.twse.com.tw/exchangeReport/STOCK_DAY?response=json&date={date}&stockNo={stock}"
-                response = requests.get(url=address, headers={ 'user-agent': user_agent.random })
-                data = response.text  # 這是json格式的資料
-                a_json = json.loads(data)  # 轉成dict
-                todat_date = "{}/{}/{}".format(today.year - 1911, f"{today.month:02d}", f"{today.day:02d}")
-                for data in a_json["data"]:
-                    if(data[0] == todat_date):
-                        data[1] = data[1].replace(",", "")
-                        data[2] = data[2].replace(",", "")
-                        data[3] = data[3].replace(",", "")
-                        data[4] = data[4].replace(",", "")
-                        data[5] = data[5].replace(",", "")
-                        data[6] = data[6].replace(",", "")
-                        data[7] = data[7].replace(",", "")
-                        data[8] = data[8].replace(",", "")
-                        cursor.execute(insert_command, (r[0], data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8]))
-                        conn.commit()
-                        break;
-                time.sleep(10)
-                print(time.strftime("%H:%M:%S", time.localtime()) + " " + address)
-            except Exception as ex:
-                time.sleep(10)
-                print(time.strftime("%H:%M:%S", time.localtime()) + " error " + address + " " + data)
-                continue
-except Exception as e:
-#    print(e)
-    error_class = e.__class__.__name__ #取得錯誤類型
-    detail = e.args[0] #取得詳細內容
-    cl, exc, tb = sys.exc_info() #取得Call Stack
-    lastCallStack = traceback.extract_tb(tb)[-1] #取得Call Stack的最後一筆資料
-    fileName = lastCallStack[0] #取得發生的檔案名稱
-    lineNum = lastCallStack[1] #取得發生的行號
-    funcName = lastCallStack[2] #取得發生的函數名稱
-    errMsg = "File \"{}\", line {}, in {}: [{}] {}".format(fileName, lineNum, funcName, error_class, detail)
-    print(errMsg)
+def daily_search():
+    try:  
+        user_agent = UserAgent()
+        conn = pymssql.connect(**db_settings)
+        with conn.cursor() as cursor:
+            insert_command = "INSERT INTO stock_data(c, d, v, z, o, h, l, tz, u, tv) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            command = "SELECT * FROM [dbo].[stock_list]"
+            cursor.execute(command)
+            result = cursor.fetchall()
+            for r in result:
+                try:
+                    stock = r[0]
+                    if r[2] == "上市":
+                        stock_type = "tse"
+                    elif r[2] == "上櫃":
+                        stock_type = "otc"
+
+                    address = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch={stock_type}_{stock}.tw&json=1&delay=0"
+                    response = requests.get(url=address, headers={ 'user-agent': user_agent.random })
+                    data = response.text  # 這是json格式的資料
+                    a_json = json.loads(data)  # 轉成dict
+
+                    data_json = a_json["msgArray"][0]
+                    date = data_json["d"] + " " + time.strftime("%H:%M:%S", time.localtime())
+
+                    if(stock_type == "tse"): v = int(data_json["v"]) * 1000
+                    else: v = int(data_json["v"])
+
+                    change = round(float(data_json["z"]) - float(data_json["y"]), 2)
+                    cursor.execute(insert_command, (r[0], date, str(v), "", data_json["o"], data_json["h"], data_json["l"], data_json["z"], str(change), ""))
+                    conn.commit()
+                    time.sleep(10)
+                    print(time.strftime("%H:%M:%S", time.localtime()) + " " + address)
+                except Exception as ex:
+                    time.sleep(10)
+                    print(time.strftime("%H:%M:%S", time.localtime()) + " error " + address + " " + data)
+                    continue
+            conn.close()
+    except Exception as e:
+    #    print(e)
+        error_class = e.__class__.__name__ #取得錯誤類型
+        detail = e.args[0] #取得詳細內容
+        cl, exc, tb = sys.exc_info() #取得Call Stack
+        lastCallStack = traceback.extract_tb(tb)[-1] #取得Call Stack的最後一筆資料
+        fileName = lastCallStack[0] #取得發生的檔案名稱
+        lineNum = lastCallStack[1] #取得發生的行號
+        funcName = lastCallStack[2] #取得發生的函數名稱
+        errMsg = "File \"{}\", line {}, in {}: [{}] {}".format(fileName, lineNum, funcName, error_class, detail)
+        print(errMsg)
+
+
+# In[28]:
+
+
+from apscheduler.schedulers.blocking import BlockingScheduler
+
+conn = pymssql.connect(**db_settings)
+with conn.cursor() as cursor:
+    today = datetime.today().strftime('%Y%m%d')
+    command = "select * from [dbo].[calendar] where date = '" + today + "'"
+    cursor.execute(command)
+    result = cursor.fetchall()[0]
+    if(result[2].strip() == "1"):
+        scheduler = BlockingScheduler()
+
+        now = datetime.today().strftime('%Y-%m-%d %H:%M:%S')
+        end = datetime.today().strftime('%Y-%m-%d') + " 14:00:00"
+        scheduler.add_job(daily_search, 'interval', hours=1, start_date=now, end_date=end, next_run_time=now)
+
+        def my_listener(event):
+            if event.exception:
+                print('The job crashed :(')
+            else:
+                print('The job worked :)')
+
+        # 當任務執行完或任務出錯時，調用my_listener
+        scheduler.add_listener(my_listener, EVENT_JOB_EXECUTED | EVENT_JOB_ERROR)
+
+        scheduler.start()
+    else:
+        print("no work!")
+
+
+# In[ ]:
+
+
+
 
